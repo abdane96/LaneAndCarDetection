@@ -4,20 +4,23 @@
 #include<opencv2/highgui/highgui.hpp>
 #include<opencv2/imgproc/imgproc.hpp>
 #include<iostream>
-#include<windows.h>
 #include<conio.h>           // it may be necessary to change or remove this line if not using Windows
 #include <string>
+#include <memory>
+#include <stdexcept>
 #include "Blob.h"
-#include "stdlib.h"
-#include <time.h>
+#include <windows.h> 
 #include <cstdlib>
-#include "mosquittopp.cpp"
-
+#include "stdlib.h"
+#include <array>
+#include <time.h>
+//#include "mosquittopp.h"
+//#include "Mosquitto\mqtt.h"
 
 #define SHOW_STEPS            // un-comment or comment this line to show steps or not
 using namespace std;
 using namespace cv;
-using namespace mosqpp;
+//using namespace mosqpp;
 
 // global variables ///////////////////////////////////////////////////////////////////////////////
 const Scalar SCALAR_BLACK = Scalar(0.0, 0.0, 0.0);
@@ -30,7 +33,10 @@ time_t waitStartTime;
 boolean SNRedTrue;
 boolean WERedTrue;
 boolean cycle;
+boolean alreadyPrinted;
+boolean leftGreenEast, leftGreenSouth;
 int greenTimeSN, greenTimeWE;
+string RPiAddress;
 
 // function prototypes ////////////////////////////////////////////////////////////////////////////
 void matchCurrentFrameBlobsToExistingBlobs(vector<Blob> &existingBlobs, vector<Blob> &currentFrameBlobs);
@@ -39,17 +45,45 @@ void addNewBlob(Blob &currentFrameBlob, vector<Blob> &existingBlobs);
 double distanceBetweenPoints(Point point1, Point point2);
 void drawAndShowContours(Size imageSize, vector<vector<Point> > contours, string strImageName);
 void drawAndShowContours(Size imageSize, vector<Blob> blobs, string strImageName);
-bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &intersectionOfInterest, int &intHorizontalLinePosition, int &intHorizontalLinePosition2, int &carCount, int &midCount, int &midCount2, int &midCount3, int &leftCount, int &rightCount);
+bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &intersectionOfInterest, int &intHorizontalLinePosition, int &intHorizontalLinePosition2, int &carCount, int &midCount, int &midCount2, int &midCount3, int &leftCount, int &rightCount, int Cars[]);
 void drawBlobInfoOnImage(vector<Blob> &blobs, Mat &imgFrame2Copy);
 void drawCarCountOnImage(int &numberOfLanes, int &carCount, int &midCount, int &midCount2, int &midCount3, int &leftCount, int &rightCount, Mat &imgFrame2Copy);
 void CallBackFunc(int event, int x, int y, int flags, void* userdata);
 Mat whiteFilter(const Mat& src);
-void TrafficLogic(int &carCountSouth, int &carCountEast);
+void TrafficLogic(int &carCountSouth, int &carCountEast, int carsSouth[], int carsEast[], int &max, int &maxTime, boolean &leftGreenSouth, boolean &leftGreenEast);
+int countMaxTime(int cars[],int &max,int &maxTime, boolean &leftGreen);
+//string exec(const char* cmd);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-int main(void) {
+int main(void){//int argc, char *argv[]) {
+	
+	/*class mqtt_client *iot_client;
+	int rc;
 
+	char client_id[] = CLIENT_ID;
+	char host[] = BROKER_ADDRESS;
+	int port = MQTT_PORT;
+
+	mosqpp::lib_init();
+	if (argc > 1)
+		strcpy_s(host, argv[1]);
+
+	iot_client = new mqtt_client(client_id, host, port);
+
+	while (1)
+	{
+		rc = iot_client->loop();
+		if (rc)
+		{
+			iot_client->reconnect();
+		}
+		else
+			iot_client->subscribe(NULL, MQTT_TOPIC);
+	}
+
+	mosqpp::lib_cleanup();*/
+	
 	VideoCapture capVideo, capVideo2;
 
 
@@ -71,11 +105,17 @@ int main(void) {
 	int midCount3East = 0;
 	int leftCountEast = 0;
 	int rightCountEast = 0;
+	int carsSouth[5] = { 0,0,0,0,0 };
+	int carsEast[5] = { 0,0,0,0,0 };
+	int max, maxTime = 0;
+	
 	greenTimeSN = 0;
 	greenTimeWE = 0;
 	SNRedTrue = false;
 	WERedTrue = true;
 	cycle = false;
+	alreadyPrinted = false;
+	leftGreenSouth, leftGreenEast = false;
 	capVideo.open("Cars.mp4");
 	//capVideo.open("rtsp://admin:Rem99h21!!@169.254.36.158/doc/page/previw.asp");
 	//capVideo.open("rtsp://cam1:Rem99h21!!@192.168.0.21:88/videoMain");
@@ -306,7 +346,7 @@ int main(void) {
 		//cout << "First one is: " << lineInfoSouth[i][0] << ", Second one is: " << lineInfoSouth[i + 1][0] << endl;
 		
 		//if (abs(lineInfoSouth[i][0] - lineInfoSouth[i + 1][0]) > 200 && abs(lineInfoSouth[i][0] - lineInfoSouth[i + 1][0]) < 400) {
-		if (abs(lineInfoSouth[i][0] - lineInfoSouth[i + 1][0]) > 20 && abs(lineInfoSouth[i][0] - lineInfoSouth[i + 1][0]) < 500) {
+		if (abs(lineInfoSouth[i][0] - lineInfoSouth[i + 1][0]) > 50 && abs(lineInfoSouth[i][0] - lineInfoSouth[i + 1][0]) < 180) {
 			numberOfLanesSouth++;
 			//cout << "GAP SOUTH" << endl;
 			circle(cvtCSouth, Point(lineInfoSouth[i][0], intHorizontalLinePositionSouth), 10, Scalar(255, 0, 0));
@@ -499,8 +539,8 @@ int main(void) {
 		//drawBlobInfoOnImage(blobsSouth, imgFrame2CopySouth);
 		//drawBlobInfoOnImage(blobsEast, imgFrame2CopyEast);
 
-		bool blnAtLeastOneBlobCrossedTheLineSouth = checkIfBlobsCrossedTheLine(blobsSouth, intersectionOfInterestSouth, intHorizontalLinePositionSouth, intHorizontalLinePositionSouth2, carCountSouth, midCountSouth, midCount2South, midCount3South, leftCountSouth, rightCountSouth);
-		bool blnAtLeastOneBlobCrossedTheLineEast = checkIfBlobsCrossedTheLine(blobsEast, intersectionOfInterestEast, intHorizontalLinePositionEast, intHorizontalLinePositionEast2, carCountEast, midCountEast, midCount2East, midCount3East, leftCountEast, rightCountEast);
+		bool blnAtLeastOneBlobCrossedTheLineSouth = checkIfBlobsCrossedTheLine(blobsSouth, intersectionOfInterestSouth, intHorizontalLinePositionSouth, intHorizontalLinePositionSouth2, carCountSouth, midCountSouth, midCount2South, midCount3South, leftCountSouth, rightCountSouth, carsSouth);
+		bool blnAtLeastOneBlobCrossedTheLineEast = checkIfBlobsCrossedTheLine(blobsEast, intersectionOfInterestEast, intHorizontalLinePositionEast, intHorizontalLinePositionEast2, carCountEast, midCountEast, midCount2East, midCount3East, leftCountEast, rightCountEast, carsEast);
 
 		if (blnAtLeastOneBlobCrossedTheLineSouth == true) {
 			line(imgFrame2CopySouth, crossingLineSouth[0], crossingLineSouth[1], SCALAR_GREEN, 2);
@@ -574,7 +614,7 @@ int main(void) {
 
 		blnFirstFrame = false;
 		
-		TrafficLogic(carCountSouth,carCountEast);
+		TrafficLogic(carCountSouth,carCountEast, carsSouth, carsEast, max, maxTime, leftGreenSouth, leftGreenEast);
 		chCheckForEscKey = waitKey(1);
 	}
 
@@ -586,19 +626,24 @@ int main(void) {
 	return(0);
 }
 
-void TrafficLogic(int &carCountSouth, int &carCountEast) {
-	
+void TrafficLogic(int &carCountSouth, int &carCountEast, int carsSouth[], int carsEast[], int &max, int &maxTime, boolean &leftGreenSouth, boolean &leftGreenEast) {
 
 	time_t seconds = time(NULL)-startTime;
 	//long seconds = System.nanoTime() / 1000000000 - startTime;
 	long yellowTime = 3;
-	if (seconds > yellowTime) { // After 7 seconds, the first cycle starts
+
+	if (seconds > yellowTime) { // After 3 seconds, the first cycle starts
 
 		if (!cycle) {
-			greenTimeSN = 2 * (carCountSouth);//+ northCount);
-			greenTimeWE = 2 * (carCountEast);//+ eastCount);
+			greenTimeSN = countMaxTime(carsSouth, max, maxTime, leftGreenSouth);
+
+			
+			greenTimeWE = countMaxTime(carsEast, max, maxTime, leftGreenEast);
+
 			if (greenTimeSN > 0 || greenTimeWE > 0) {
+			//if (greenTimeSN > 0 && greenTimeWE > 0) {
 				cycle = true;
+				//yellowTime = 3;
 			}
 			else {
 				cout << "No cars detected" << endl;
@@ -607,38 +652,95 @@ void TrafficLogic(int &carCountSouth, int &carCountEast) {
 		else {
 			// SN first then WE // FIX THE CASE WHEN greenTimeSN IS ZERO
 			if (!SNRedTrue) {
-				greenTimeWE = 2 * (carCountEast);// +eastCount);
+				//greenTimeWE = 2 * (carCountEast);// +eastCount);
+
+				//Keep track of the max time for East				
+				greenTimeWE = countMaxTime(carsEast, max, maxTime, leftGreenEast);
+
 				// while SNRedTrue is false (SN is green), keep into account of the WE count
 				//SNGreen(); // Set SN to green
-				cout << "SOUTH and NORTH are now Green for " << greenTimeSN << " seconds"<< endl;
+				if (!alreadyPrinted) {
+					if (leftGreenSouth) {
+						//system("mosquitto_pub -h raspberrypi -t test -m \"4\"");
+						cout << "South and North Left are now Green for " << greenTimeSN << " seconds" << endl;
+						alreadyPrinted = true;
+					}
+					else {
+						//system("mosquitto_pub -h raspberrypi -t test -m \"0\"");
+						cout << "South and North are now Green for " << greenTimeSN << " seconds" << endl;
+						alreadyPrinted = true;
+					}					
+				}				
 				if (seconds - yellowTime >= greenTimeSN) { // Set SN Red after the time for green (2*(southCount+northCount))
-					SNRedTrue = true;
-					WERedTrue = false;
-					waitStartTime = time(NULL);
-					//SNRed();
-					cout << "South and North are now Yellow for " << yellowTime << " seconds" << endl;
+					if (leftGreenSouth) {
+						greenTimeSN = countMaxTime(carsSouth, max, maxTime, leftGreenSouth);
+						if (leftGreenSouth) {
+							leftGreenSouth = false;
+						}
+						startTime = time(NULL);
+					}else {
+						if (greenTimeWE != 0) {
+							//do this only if there are cars detected on other side
+							SNRedTrue = true;
+							WERedTrue = false;
+							waitStartTime = time(NULL);
+							//SNRed();
+							cout << "South and North are now Yellow for " << yellowTime << " seconds" << endl;
+							//system("mosquitto_pub -h raspberrypi -t test -m \"2\"");
+							alreadyPrinted = false;
+						}
+						else {
+							greenTimeSN = countMaxTime(carsSouth, max, maxTime, leftGreenSouth);
+							startTime = time(NULL);
+						}
+					}
 				}
 				//System.out.println("SN is " + greenTimeSN);
 				//System.out.println("SN is " + (seconds - yellowTime));
-
 			}
 			else if (!WERedTrue) {
 				// greenTimeSN = 2*(southCount+northCount);
 				long waitEndTime = time(NULL);
-				if (waitEndTime - waitStartTime >= 3) {
-					int greenTimeSN2 = 2 * (carCountSouth);// +northCount);
+				if (waitEndTime - waitStartTime >= yellowTime) {
+					//int greenTimeSN2 = 2 * (carCountSouth);// +northCount);
+					int greenTimeSN2;
+					
+					//Keep track of the max time for South
+					
+					greenTimeSN2 = countMaxTime(carsSouth, max, maxTime, leftGreenSouth);
+					
 					//greenTimeSN is taken into account below, if it keeps getting updated, we will never reach >= greenTimeWE
 					//WEGreen();
-					cout << "West and East are now green for " << greenTimeWE << " seconds" << endl;
-					if (seconds - yellowTime - greenTimeSN - 3 >= greenTimeWE) {
+					if (!alreadyPrinted) {
+						if (leftGreenSouth) {
+							//system("mosquitto_pub -h raspberrypi -t test -m \"5\"");
+							cout << "West and East Left are now Green for " << greenTimeWE << " seconds" << endl;
+							alreadyPrinted = true;
+						}
+						else {
+							cout << "West and East are now green for " << greenTimeWE << " seconds" << endl;
+							//system("mosquitto_pub -h raspberrypi -t test -m \"1\"");
+							alreadyPrinted = true;
+						}
+					}
+					
+					if (seconds - yellowTime - greenTimeSN - yellowTime >= greenTimeWE) {
+
 						//WERed();
-						cout << "Weat and East are now yellow for " << yellowTime << " seconds" << endl;
-						if (seconds - yellowTime - greenTimeSN - 3 - greenTimeWE >= 0) {
+						cout << "West and East are now yellow for " << yellowTime << " seconds" << endl;
+						//system("mosquitto_pub -h raspberrypi -t test -m \"3\"");
+						if (seconds - yellowTime - greenTimeSN - yellowTime - greenTimeWE >= 0) {
 							WERedTrue = true;
 							SNRedTrue = false;
 							cycle = false;
 							startTime = time(NULL);
 							greenTimeSN = greenTimeSN2;
+							alreadyPrinted = false;
+						}
+						else {
+							//Maybe dont need because time resets anyways?
+							
+							greenTimeWE = countMaxTime(carsEast, max, maxTime, leftGreenEast);
 						}
 					}
 				}
@@ -762,7 +864,7 @@ void drawAndShowContours(Size imageSize, vector<Blob> blobs, string strImageName
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &points, int &intHorizontalLinePosition, int &intHorizontalLinePosition2, int &carCount, int &midCount, int &midCount2, int &midCount3, int &leftCount, int&rightCount) {
+bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &points, int &intHorizontalLinePosition, int &intHorizontalLinePosition2, int &carCount, int &midCount, int &midCount2, int &midCount3, int &leftCount, int &rightCount, int cars[]) {
 	bool blnAtLeastOneBlobCrossedTheLine = false;
 	int numberOfLanes = points.size() - 1;
 	double point1, point2, point3, point4, point5, point6;
@@ -816,9 +918,11 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 				else if (numberOfLanes == 2) {
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						leftCount++;
+						cars[0]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						rightCount++;
+						cars[4]++;
 					}
 					else {
 						cout << "ERROR, CAR OUT OF BOUNDS";
@@ -827,12 +931,15 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 				else if (numberOfLanes == 3) {
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						leftCount++;
+						cars[0]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						midCount++;
+						cars[1]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point3 && blob.centerPositions[currFrameIndex].x < point4) {
 						rightCount++;
+						cars[5]++;
 					}
 					else {
 						cout << "ERROR, CAR OUT OF BOUNDS";
@@ -841,15 +948,19 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 				else if (numberOfLanes == 4) {
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						leftCount++;
+						cars[0]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						midCount++;
+						cars[1]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point3 && blob.centerPositions[currFrameIndex].x < point4) {
 						midCount2++;
+						cars[2]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point4 && blob.centerPositions[currFrameIndex].x < point5) {
 						rightCount++;
+						cars[4]++;
 					}
 					else {
 						cout << "ERROR, CAR OUT OF BOUNDS";
@@ -860,22 +971,27 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						//cout << "LEFT" << endl;
 						leftCount++;
+						cars[0]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						//cout << "MID1" << endl;
 						midCount++;
+						cars[1]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point3 && blob.centerPositions[currFrameIndex].x < point4) {
 						//cout << "MID2" << endl;
 						midCount2++;
+						cars[2]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point4 && blob.centerPositions[currFrameIndex].x < point5) {
 						//cout << "MID3" << endl;
 						midCount3++;
+						cars[3]++;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point5 && blob.centerPositions[currFrameIndex].x < point6) {
 						//cout << "RIGHT" << endl;
 						rightCount++;
+						cars[4]++;
 					}
 					else {
 						//cout << "ERROR, CAR OUT OF BOUNDS";
@@ -895,9 +1011,11 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 				else if (numberOfLanes == 2) {
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						leftCount--;
+						cars[0]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						rightCount--;
+						cars[4]--;
 					}
 					else {
 						cout << "ERROR, CAR OUT OF BOUNDS";
@@ -906,12 +1024,15 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 				else if (numberOfLanes == 3) {
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						leftCount--;
+						cars[0]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						midCount--;
+						cars[1]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point3 && blob.centerPositions[currFrameIndex].x < point4) {
 						rightCount--;
+						cars[4]--;
 					}
 					else {
 						cout << "ERROR, CAR OUT OF BOUNDS";
@@ -920,15 +1041,19 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 				else if (numberOfLanes == 4) {
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						leftCount--;
+						cars[0]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						midCount--;
+						cars[1]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point3 && blob.centerPositions[currFrameIndex].x < point4) {
 						midCount2--;
+						cars[2]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point4 && blob.centerPositions[currFrameIndex].x < point5) {
 						rightCount--;
+						cars[4]--;
 					}
 					else {
 						cout << "ERROR, CAR OUT OF BOUNDS";
@@ -939,22 +1064,27 @@ bool checkIfBlobsCrossedTheLine(vector<Blob> &blobs, vector<vector<double>> &poi
 					if (blob.centerPositions[currFrameIndex].x >= point1 && blob.centerPositions[currFrameIndex].x < point2) {
 						//cout << "LEFT" << endl;
 						leftCount--;
+						cars[0]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point2 && blob.centerPositions[currFrameIndex].x < point3) {
 						//cout << "MID1" << endl;
 						midCount--;
+						cars[1]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point3 && blob.centerPositions[currFrameIndex].x < point4) {
 						//cout << "MID2" << endl;
 						midCount2--;
+						cars[2]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point4 && blob.centerPositions[currFrameIndex].x < point5) {
 						//cout << "MID3" << endl;
 						midCount3--;
+						cars[3]--;
 					}
 					else if (blob.centerPositions[currFrameIndex].x >= point5 && blob.centerPositions[currFrameIndex].x < point6) {
 						//cout << "RIGHT" << endl;
 						rightCount--;
+						cars[4]--;
 					}
 					else {
 						//cout << "ERROR, CAR OUT OF BOUNDS";
@@ -1122,4 +1252,42 @@ void CallBackFunc(int event, int x, int y, int flags, void* userdata)
 		cout << "Mouse move over the window - position (" << x << ", " << y << ")" << endl;
 
 	}
+}
+
+int countMaxTime(int cars[], int &max, int &maxTime, boolean &leftGreen) {
+	maxTime = 0;
+	for (int i = 0; i < (sizeof(cars) / sizeof(*cars)); i++) {
+		if (i == 0) {
+			max = cars[i];
+			leftGreen = true;
+		}
+		else {
+			if (cars[i] > max) {
+				max = cars[i];
+				leftGreen = false;
+			}
+		}
+	}
+	maxTime = 2 * max + max;
+	/*for (int i = 1; i <= max; i++) {
+		maxTime += 2 * i;
+	}*/
+	return maxTime;
+		/*
+			for (int j = 1; j <= cars[i]; j++) {
+				max += 2 * j;
+				maxTime = max;
+			}
+		}
+		else {
+			for (int j = 1; j <= cars[i]; j++) {
+				maxTime += 2 * j;
+			}
+			if (maxTime > max) {
+				max = maxTime;
+			}
+		}
+	}
+	int greenTime = max;
+	return greenTime;*/
 }
